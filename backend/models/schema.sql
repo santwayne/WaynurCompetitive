@@ -177,3 +177,16 @@ CREATE TABLE IF NOT EXISTS ai_usage (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ai_usage_centre_day ON ai_usage (centre_id, created_at);
+
+-- Shared exam-pattern templates. Check marks and timing against each new
+-- official notification before a batch relies on them; centres can add their own.
+INSERT INTO exam_patterns (centre_id, code, name, version, duration_min, marks_correct, marks_wrong, sections) VALUES
+  (NULL, 'SSC-CGL-T1', 'SSC CGL Tier 1', '2025', 60, 2, 0.5,
+   '[{"subject":"General Intelligence & Reasoning","questions":25},{"subject":"General Awareness","questions":25},{"subject":"Quantitative Aptitude","questions":25},{"subject":"English Comprehension","questions":25}]'),
+  (NULL, 'SSC-CHSL-T1', 'SSC CHSL Tier 1', '2025', 60, 2, 0.5,
+   '[{"subject":"English Language","questions":25},{"subject":"General Intelligence","questions":25},{"subject":"Quantitative Aptitude","questions":25},{"subject":"General Awareness","questions":25}]'),
+  (NULL, 'RRB-NTPC-CBT1', 'RRB NTPC CBT 1', '2025', 90, 1, 0.33,
+   '[{"subject":"General Awareness","questions":40},{"subject":"Mathematics","questions":30},{"subject":"General Intelligence & Reasoning","questions":30}]'),
+  (NULL, 'RRB-GROUP-D', 'RRB Group D CBT', '2025', 90, 1, 0.33,
+   '[{"subject":"General Science","questions":25},{"subject":"Mathematics","questions":25},{"subject":"General Intelligence & Reasoning","questions":30},{"subject":"General Awareness & Current Affairs","questions":20}]')
+ON CONFLICT (COALESCE(centre_id, 0), code, version) DO NOTHING;
