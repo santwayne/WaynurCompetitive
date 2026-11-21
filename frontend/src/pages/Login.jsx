@@ -66,6 +66,11 @@ export default function Login({ student = false }) {
             {otp ? 'Use password instead' : 'Get a login code on WhatsApp'}
           </button>
         )}
+        {student && (
+          <button type="button" className="w-full text-xs text-ink-soft" onClick={() => { try { localStorage.removeItem('wc_centre_code'); } catch { /* ignore */ } window.location.assign('/app'); }}>
+            Not your centre? Change centre code
+          </button>
+        )}
         {student
           ? <p className="text-xs text-muted-foreground">Links your centre sends on WhatsApp open your test directly. First time with a password? It is your mobile number.</p>
           : <p className="text-sm text-ink-soft">New centre? <Link to="/signup" className="font-semibold text-terracotta">Create an account</Link></p>}

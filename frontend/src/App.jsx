@@ -1,6 +1,7 @@
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { BookOpen, Building2, FileText, GraduationCap, LayoutGrid, LogOut, MessageCircle, Users } from 'lucide-react';
 import { getSession, setSession } from './api.js';
+import { inApp } from './native.js';
 import Login from './pages/Login.jsx';
 import Signup from './pages/Signup.jsx';
 import Dashboard from './pages/Dashboard.jsx';
@@ -15,6 +16,7 @@ import Result from './pages/Result.jsx';
 import Practice from './pages/Practice.jsx';
 import WhatsApp from './pages/WhatsApp.jsx';
 import Magic from './pages/Magic.jsx';
+import AppStart from './pages/AppStart.jsx';
 import AdminLogin from './pages/admin/AdminLogin.jsx';
 import AdminHome from './pages/admin/AdminHome.jsx';
 import AdminCentre from './pages/admin/AdminCentre.jsx';
@@ -38,7 +40,7 @@ function Shell({ links, children }) {
           </nav>
           <div className="ml-auto flex items-center gap-3 text-sm text-ink-soft">
             <span className="hidden sm:inline">{s?.name} · {s?.centre}</span>
-            <button className="btn-ghost px-3 py-1.5" onClick={() => { const admin = s?.kind === 'super_admin'; setSession(null); nav(admin ? '/admin/login' : '/login'); }}><LogOut size={15} aria-hidden="true" />Log out</button>
+            <button className="btn-ghost px-3 py-1.5" onClick={() => { const admin = s?.kind === 'super_admin'; setSession(null); nav(admin ? '/admin/login' : inApp() ? '/app' : '/login'); }}><LogOut size={15} aria-hidden="true" />Log out</button>
           </div>
         </div>
       </header>
@@ -65,6 +67,7 @@ export default function App() {
   const { pathname } = useLocation();
   // A WhatsApp link logs the student in, whoever was logged in on this phone before.
   if (pathname.startsWith('/go/')) return <Routes><Route path="/go/:token" element={<Magic />} /></Routes>;
+  if (pathname === '/app') return <AppStart />;
   if (pathname.startsWith('/admin') && s?.kind !== 'super_admin') {
     return <Routes><Route path="*" element={<AdminLogin />} /></Routes>;
   }

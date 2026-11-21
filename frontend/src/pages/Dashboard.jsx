@@ -28,7 +28,7 @@ export default function Dashboard() {
           <h1 className="h1">Batches</h1>
           <p className="text-sm text-ink-soft">Teach → Check → Diagnose → Intervene → Verify. Open a batch to run a test.</p>
         </div>
-        <div className="text-sm text-ink-soft">Student login link: <code className="rounded bg-secondary px-2 py-1">{studentLink}</code></div>
+        <div className="text-sm text-ink-soft">Student login link: <code className="rounded bg-secondary px-2 py-1">{studentLink}</code> · App centre code: <code className="rounded bg-secondary px-2 py-1">{s.centreId}</code></div>
       </div>
       {!wa.connected && (
         <p className="rounded-lg bg-secondary px-3 py-2 text-sm">WhatsApp is not connected yet, so students, parents and teachers get nothing on WhatsApp. The Waynur team connects your centre's number. <Link to="/whatsapp" className="font-semibold text-terracotta">What it does</Link></p>
