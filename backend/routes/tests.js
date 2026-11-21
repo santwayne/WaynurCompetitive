@@ -3,43 +3,14 @@ import pool from '../config/db.js';
 import { requireAuth, requireStaff } from '../middleware/auth.js';
 import { ownBatch } from './centre.js';
 import { bad, intId, notFound, route, text } from '../services/util.js';
+import { commonStudents, compareTopics, diagnose, pickPractice, planInterventions, scoreResponses } from '../services/loop.js';
 import {
-  buildParallel, commonStudents, compareTopics, diagnose, pickPractice, planInterventions, scoreResponses,
-} from '../services/loop.js';
-import { rewriteActions } from '../services/aiLoop.js';
+  approvedBank, createActions, createRetest, insertTest, ownTest, setTestStatus, testData,
+} from '../services/loopActions.js';
+import { dispatch, notifyParents, notifyPractice, notifyTeacher, notifyTestOpen } from '../services/notify.js';
 
 const router = Router();
 router.use(requireAuth, requireStaff);
-
-async function ownTest(centreId, testId) {
-  const { rows } = await pool.query('SELECT * FROM tests WHERE id = $1 AND centre_id = $2', [intId(testId, 'test'), centreId]);
-  if (!rows.length) throw notFound('Test not found');
-  return rows[0];
-}
-
-async function approvedBank(centreId, topicIds) {
-  const { rows } = await pool.query(
-    `SELECT id, topic_id FROM questions WHERE centre_id = $1 AND status = 'approved' AND topic_id = ANY($2::int[])`,
-    [centreId, topicIds]
-  );
-  const byTopic = new Map();
-  for (const q of rows) byTopic.set(q.topic_id, [...(byTopic.get(q.topic_id) || []), q]);
-  return byTopic;
-}
-
-async function insertTest(client, fields, questionIds) {
-  const { rows } = await client.query(
-    `INSERT INTO tests (centre_id, batch_id, title, kind, mode, parent_test_id, duration_min, marks_correct, marks_wrong, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-    [fields.centre_id, fields.batch_id, fields.title, fields.kind, fields.mode, fields.parent_test_id ?? null,
-      fields.duration_min, fields.marks_correct, fields.marks_wrong, fields.created_by]
-  );
-  const test = rows[0];
-  for (const [i, qid] of questionIds.entries()) {
-    await client.query('INSERT INTO test_questions (test_id, question_id, position) VALUES ($1,$2,$3)', [test.id, qid, i + 1]);
-  }
-  return test;
-}
 
 // POST /api/tests — create a draft test.
 //  { batchId, title, kind: 'exit_ticket'|'scheduled', mode: 'online'|'paper',
@@ -108,12 +79,10 @@ router.get('/:id', route(async (req, res) => {
 }));
 
 router.post('/:id/status', route(async (req, res) => {
-  const test = await ownTest(req.user.centre_id, req.params.id);
-  const next = req.body.status;
-  const allowed = { draft: ['published'], published: ['closed'], closed: ['published'] };
-  if (!allowed[test.status]?.includes(next)) throw bad(`A ${test.status} test can't be moved to ${next}`);
-  await pool.query('UPDATE tests SET status = $1 WHERE id = $2', [next, test.id]);
-  res.json({ ok: true, status: next });
+  const test = await setTestStatus(await ownTest(req.user.centre_id, req.params.id), req.body.status);
+  // WhatsApp-first: publishing an online test sends each student their link.
+  if (test.status === 'published' && req.body.notify !== false) await dispatch(() => notifyTestOpen(test), 'test_open');
+  res.json({ ok: true, status: test.status });
 }));
 
 // POST /api/tests/:id/paper — marks from a paper test.
@@ -159,33 +128,11 @@ router.post('/:id/paper', route(async (req, res) => {
   } finally {
     client.release();
   }
+  if (req.body.notify !== false) {
+    await dispatch(() => notifyParents(test, results.map((r) => Number(r.studentId))), 'result_parent');
+  }
   res.json({ saved: results.length });
 }));
-
-// Everything diagnose() needs for one test. onlyStudents narrows to a set of ids.
-async function testData(test, onlyStudents = null) {
-  const [students, questions, attempts] = await Promise.all([
-    pool.query(`SELECT s.id, s.name FROM batch_students bs JOIN students s ON s.id = bs.student_id WHERE bs.batch_id = $1`, [test.batch_id]),
-    pool.query(`SELECT q.id, q.topic_id FROM test_questions tq JOIN questions q ON q.id = tq.question_id WHERE tq.test_id = $1 ORDER BY tq.position`, [test.id]),
-    pool.query(
-      `SELECT a.id, a.student_id, a.score FROM attempts a WHERE a.test_id = $1 AND a.submitted_at IS NOT NULL`, [test.id]),
-  ]);
-  const topicIds = [...new Set(questions.rows.map((q) => q.topic_id))];
-  const topics = await pool.query('SELECT id, name, subject FROM topics WHERE id = ANY($1::int[])', [topicIds]);
-  const keep = onlyStudents ? new Set(onlyStudents) : null;
-  const atts = attempts.rows.filter((a) => !keep || keep.has(a.student_id));
-  const resp = atts.length
-    ? (await pool.query('SELECT attempt_id, question_id, chosen_index, is_correct FROM responses WHERE attempt_id = ANY($1::int[])', [atts.map((a) => a.id)])).rows
-    : [];
-  const byAttempt = new Map();
-  for (const r of resp) byAttempt.set(r.attempt_id, [...(byAttempt.get(r.attempt_id) || []), r]);
-  return {
-    students: students.rows.filter((s) => !keep || keep.has(s.id)),
-    questions: questions.rows,
-    topics: topics.rows,
-    attempts: atts.map((a) => ({ student_id: a.student_id, score: Number(a.score), responses: byAttempt.get(a.id) || [] })),
-  };
-}
 
 router.get('/:id/diagnosis', route(async (req, res) => {
   const test = await ownTest(req.user.centre_id, req.params.id);
@@ -195,44 +142,14 @@ router.get('/:id/diagnosis', route(async (req, res) => {
 
 // POST /api/tests/:id/actions — turn the diagnosis into the next-class action
 // list and per-student practice sets. Safe to press twice: existing items are kept.
+// WhatsApp: each weak student gets their practice link, the teacher the summary.
 router.post('/:id/actions', route(async (req, res) => {
   const test = await ownTest(req.user.centre_id, req.params.id);
-  const data = await testData(test);
-  const diag = diagnose(data);
-  if (!diag.participation.submitted) throw bad('No one has submitted this test yet');
-  let plan = planInterventions(diag);
-  plan = await rewriteActions(req.user.centre_id, plan, diag); // AI wording if configured; numbers stay ours
-  const used = data.questions.map((q) => q.id);
-  const bank = await approvedBank(req.user.centre_id, [...new Set(plan.map((p) => p.topic_id))]);
-  let created = 0;
-  let practiceSets = 0;
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    for (const item of plan) {
-      const ins = await client.query(
-        `INSERT INTO interventions (centre_id, test_id, topic_id, kind, accuracy, note) VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (test_id, topic_id, kind) DO NOTHING RETURNING id`,
-        [req.user.centre_id, test.id, item.topic_id, item.kind, item.accuracy, item.note]
-      );
-      if (!ins.rowCount) continue;
-      created += 1;
-      for (const studentId of item.students) {
-        const ids = pickPractice(bank.get(item.topic_id) || [], used);
-        if (!ids.length) continue;
-        await client.query('INSERT INTO practice_sets (intervention_id, student_id, question_ids) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
-          [ins.rows[0].id, studentId, ids]);
-        practiceSets += 1;
-      }
-    }
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
+  const out = await createActions(req.user.centre_id, test);
+  if (req.body?.notify !== false) {
+    await dispatch(async () => { await notifyPractice(test); await notifyTeacher(test); }, 'practice/teacher_report');
   }
-  res.json({ created, practice_sets: practiceSets });
+  res.json({ created: out.created, practice_sets: out.practice_sets });
 }));
 
 router.get('/:id/actions', route(async (req, res) => {
@@ -257,20 +174,10 @@ router.patch('/actions/:actionId', route(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// POST /api/tests/:id/retest — a parallel test: same topics, same count per
-// topic, fresh approved questions. Created as a draft the teacher publishes.
+// POST /api/tests/:id/retest — a parallel test, created as a draft the teacher publishes.
 router.post('/:id/retest', route(async (req, res) => {
   const test = await ownTest(req.user.centre_id, req.params.id);
-  if (test.kind === 'retest') throw bad('Make the re-test from the original test');
-  const { rows: qs } = await pool.query(
-    `SELECT q.id, q.topic_id FROM test_questions tq JOIN questions q ON q.id = tq.question_id WHERE tq.test_id = $1`, [test.id]);
-  const bank = await approvedBank(req.user.centre_id, [...new Set(qs.map((q) => q.topic_id))]);
-  const { questionIds, short } = buildParallel(qs, bank);
-  if (!questionIds.length) throw bad('No fresh approved questions in these topics. Add more to the bank first.');
-  const retest = await insertTest(pool, {
-    ...test, title: `Re-test: ${test.title}`.slice(0, 160), kind: 'retest', parent_test_id: test.id, created_by: req.user.user_id,
-  }, questionIds);
-  res.status(201).json({ test: retest, questions: questionIds.length, short });
+  res.status(201).json(await createRetest(req.user.centre_id, test, req.user.user_id));
 }));
 
 // GET /api/tests/:id/verify — on a re-test: did the intervention work?
@@ -283,6 +190,35 @@ router.get('/:id/verify', route(async (req, res) => {
   const before = diagnose(await testData(original, both));
   const after = diagnose(await testData(retest, both));
   res.json({ original: { id: original.id, title: original.title }, retest: { id: retest.id, title: retest.title }, comparison: compareTopics(before, after) });
+}));
+
+// ── WhatsApp for one test ────────────────────────────────────────────────
+// GET  /api/tests/:id/whatsapp — what was sent for this test, by kind.
+// POST /api/tests/:id/whatsapp { send: 'students' | 'practice' | 'parents' | 'teacher' }
+//   Sends now and waits for the counts. Anyone already messaged is skipped.
+const SENDERS = { students: notifyTestOpen, practice: notifyPractice, parents: notifyParents, teacher: notifyTeacher };
+
+router.get('/:id/whatsapp', route(async (req, res) => {
+  const test = await ownTest(req.user.centre_id, req.params.id);
+  const { rows } = await pool.query(
+    `SELECT m.kind, m.status, count(*)::int AS n FROM whatsapp_messages m
+      WHERE m.centre_id = $1 AND m.direction = 'out' AND (
+        (m.ref_type = 'test' AND m.ref_id = $2)
+        OR (m.ref_type = 'attempt' AND m.ref_id IN (SELECT id FROM attempts WHERE test_id = $2))
+        OR (m.ref_type = 'practice_set' AND m.ref_id IN (SELECT p.id FROM practice_sets p JOIN interventions i ON i.id = p.intervention_id WHERE i.test_id = $2)))
+      GROUP BY m.kind, m.status`, [req.user.centre_id, test.id]);
+  const summary = {};
+  for (const r of rows) summary[r.kind] = { ...(summary[r.kind] || {}), [r.status]: r.n };
+  const conn = await pool.query('SELECT display_number FROM centre_whatsapp WHERE centre_id = $1', [req.user.centre_id]);
+  res.json({ connected: conn.rowCount > 0, number: conn.rows[0]?.display_number || null, summary });
+}));
+
+router.post('/:id/whatsapp', route(async (req, res) => {
+  const test = await ownTest(req.user.centre_id, req.params.id);
+  const fn = SENDERS[req.body.send];
+  if (!fn) throw bad('send must be students, practice, parents or teacher');
+  if (req.body.send === 'students' && (test.status !== 'published' || test.mode !== 'online')) throw bad('Publish the online test first');
+  res.json({ result: await fn(test) });
 }));
 
 export default router;

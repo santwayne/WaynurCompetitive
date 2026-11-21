@@ -11,6 +11,7 @@ const DB = process.env.TEST_DATABASE_URL;
 process.env.DATABASE_URL = DB;
 process.env.JWT_SECRET = 'test-secret-0123456789abcdef0123456789';
 delete process.env.ANTHROPIC_API_KEY; // the no-AI fallbacks are what we test
+process.env.NOTIFY_SYNC = '1'; // wait for WhatsApp sends so each test sees the log rows
 const skip = !DB && 'set TEST_DATABASE_URL to run the API tests';
 
 let request; let app; let pool;
@@ -163,7 +164,9 @@ test('a weak student practises: fresh questions, answer shown after answering, h
 
   const hint = await request(app).post(`/api/student/practice/${sets[0].id}/hint`).set(auth(tok)).send({ questionId: set.questions[0].id });
   assert.equal(hint.body.ai, false);
-  assert.match(hint.body.hint, /^Start here: Work per day is the reciprocal/);
+  // Without AI the hint never hands over the question's explanation (it often gives the answer away).
+  const exp = (await pool.query('SELECT explanation FROM questions WHERE id = $1', [set.questions[0].id])).rows[0].explanation;
+  assert.ok(!hint.body.hint.includes(exp.split('.')[0]), hint.body.hint);
 
   for (const q of set.questions) {
     const right = (await pool.query('SELECT correct_index FROM questions WHERE id = $1', [q.id])).rows[0].correct_index;

@@ -47,6 +47,55 @@ function PaperEntry({ test, questions, students, onSaved }) {
   );
 }
 
+const SEND = [
+  { key: 'students', kind: 'test_open', label: 'Test link to students', when: (t) => t.status === 'published' && t.mode === 'online' },
+  { key: 'parents', kind: 'result_parent', label: 'Results to parents', when: (t, d) => d.participation.submitted > 0 },
+  { key: 'practice', kind: 'practice', label: 'Practice to weak students', when: (t, d, a) => a.some((x) => x.kind === 'practice') },
+  { key: 'teacher', kind: 'teacher_report', label: 'Summary to the teacher', when: (t, d, a) => a.length > 0 },
+];
+
+// What went out on WhatsApp for this test. Sending happens automatically;
+// these buttons resend to anyone who was missed (no one gets it twice).
+function WhatsAppPanel({ test, diag, actions }) {
+  const [data, error, reload] = useApi(() => api(`/tests/${test.id}/whatsapp`), [test.id, test.status, diag.participation.submitted, actions.length]);
+  const [busy, setBusy] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const [err, setErr] = useState(null);
+  if (error) return <ErrorNote error={error} />;
+  if (!data) return null;
+  const items = SEND.filter((x) => x.when(test, diag, actions));
+  async function send(key) {
+    setBusy(key); setErr(null); setMsg(null);
+    try {
+      const { result: r } = await api(`/tests/${test.id}/whatsapp`, { method: 'POST', body: { send: key } });
+      setMsg(`${r.sent} sent${r.already ? `, ${r.already} already had it` : ''}${r.no_number ? `, ${r.no_number} with no number saved` : ''}${r.skipped ? `, ${r.skipped} skipped` : ''}${r.failed ? `, ${r.failed} failed` : ''}.`);
+      reload();
+    } catch (x) { setErr(x.message); } finally { setBusy(null); }
+  }
+  const count = (kind, st) => data.summary[kind]?.[st] || 0;
+  return (
+    <section className="card space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="h2 flex items-center gap-2"><MessageCircle size={18} aria-hidden="true" />WhatsApp</h2>
+        <span className="text-sm text-ink-soft">{data.connected ? `From ${data.number}` : 'Not connected yet: the Waynur team connects your number'}</span>
+      </div>
+      <ErrorNote error={err} />{msg && <p className="text-sm">{msg}</p>}
+      {items.length ? (
+        <ul className="divide-y divide-border text-sm">
+          {items.map((x) => {
+            const ok = count(x.kind, 'sent') + count(x.kind, 'delivered') + count(x.kind, 'read');
+            return (
+              <li key={x.key} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                <span><strong>{x.label}</strong> <span className="text-ink-soft">· {ok} sent{count(x.kind, 'read') ? `, ${count(x.kind, 'read')} read` : ''}{count(x.kind, 'failed') ? `, ${count(x.kind, 'failed')} failed` : ''}{count(x.kind, 'skipped') ? `, ${count(x.kind, 'skipped')} skipped` : ''}</span></span>
+                {data.connected && <button className="btn-ghost px-3 py-1" disabled={!!busy} onClick={() => send(x.key)}>{busy === x.key ? 'Sending…' : 'Send to anyone missed'}</button>}
+              </li>);
+          })}
+        </ul>
+      ) : <p className="text-sm text-ink-soft">Publish the test to send students their link.</p>}
+    </section>
+  );
+}
+
 function Verify({ id }) {
   const [data, error] = useApi(() => api(`/tests/${id}/verify`), [id]);
   if (error) return <ErrorNote error={error} />;
@@ -111,7 +160,7 @@ export default function TestPage() {
         </div>
       </div>
       <ErrorNote error={err} />
-      {test.status === 'published' && test.mode === 'online' && <p className="rounded-lg bg-secondary px-3 py-2 text-sm">Students open <code>{loginLink}</code> and log in with their mobile number to take it.</p>}
+      {test.status === 'published' && test.mode === 'online' && <p className="rounded-lg bg-secondary px-3 py-2 text-sm">Each student got a WhatsApp link that opens this test. They can also open <code>{loginLink}</code> and log in with their mobile number.</p>}
 
       {test.mode === 'paper' && roster && <PaperEntry test={test} questions={questions} students={roster.students} onSaved={reload} />}
 
@@ -120,6 +169,8 @@ export default function TestPage() {
         <Stat label="Average score" value={avg ?? '–'} hint={`out of ${questions.length * Number(test.marks_correct)}`} />
         <Stat label="Topics to re-teach" value={d.topics.filter((t) => t.reteach).length} hint="below 60%, or 40%+ of students weak" />
       </section>
+
+      <WhatsAppPanel test={test} diag={d} actions={actions} />
 
       {test.kind === 'retest' && <Verify id={id} />}
 

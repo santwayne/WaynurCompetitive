@@ -6,7 +6,7 @@ import { ErrorNote, Loading, useApi } from '../components/ui.jsx';
 export default function Dashboard() {
   const s = getSession();
   const lead = ['owner', 'academic_head'].includes(s.role);
-  const [data, error, reload] = useApi(() => Promise.all([api('/centre/batches'), api('/syllabus/exam-patterns')]));
+  const [data, error, reload] = useApi(() => Promise.all([api('/centre/batches'), api('/syllabus/exam-patterns'), api('/centre/whatsapp')]));
   const [f, setF] = useState({ name: '', examPatternId: '' });
   const [err, setErr] = useState(null);
   const studentLink = `${window.location.origin}/s/${s.centreId}`;
@@ -20,7 +20,7 @@ export default function Dashboard() {
   }
   if (error) return <ErrorNote error={error} />;
   if (!data) return <Loading />;
-  const [{ batches }, { patterns }] = data;
+  const [{ batches }, { patterns }, wa] = data;
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -30,6 +30,9 @@ export default function Dashboard() {
         </div>
         <div className="text-sm text-ink-soft">Student login link: <code className="rounded bg-secondary px-2 py-1">{studentLink}</code></div>
       </div>
+      {!wa.connected && (
+        <p className="rounded-lg bg-secondary px-3 py-2 text-sm">WhatsApp is not connected yet, so students, parents and teachers get nothing on WhatsApp. The Waynur team connects your centre's number. <Link to="/whatsapp" className="font-semibold text-terracotta">What it does</Link></p>
+      )}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {batches.map((b) => (
           <Link key={b.id} to={`/batch/${b.id}`} className="card block hover:border-terracotta">
