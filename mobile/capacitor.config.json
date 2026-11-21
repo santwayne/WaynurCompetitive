@@ -5,7 +5,10 @@
   "server": {
     "url": "https://competitive.waynur.com/app",
     "cleartext": false,
-    "allowNavigation": ["competitive.waynur.com"]
+    "allowNavigation": [
+      "competitive.waynur.com"
+    ],
+    "errorPath": "index.html"
   },
   "android": {
     "allowMixedContent": false
