@@ -1,0 +1,16 @@
+{
+  "appId": "com.waynur.competitive",
+  "appName": "Waynur Competitive",
+  "webDir": "www",
+  "server": {
+    "url": "https://competitive.waynur.com/app",
+    "cleartext": false,
+    "allowNavigation": [
+      "competitive.waynur.com"
+    ],
+    "errorPath": "index.html"
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

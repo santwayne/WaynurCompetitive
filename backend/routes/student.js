@@ -5,6 +5,7 @@ import { requireAuth, requireStudent } from '../middleware/auth.js';
 import { bad, intId, notFound, route } from '../services/util.js';
 import { scoreResponses } from '../services/loop.js';
 import { hintFor } from '../services/aiLoop.js';
+import { dispatch, notifyParents } from '../services/notify.js';
 
 const router = Router();
 router.use(requireAuth, requireStudent);
@@ -87,6 +88,7 @@ router.post('/tests/:id/submit', route(async (req, res) => {
     }
     await client.query('UPDATE attempts SET submitted_at = now(), score = $1 WHERE id = $2', [score, attempt.id]);
     await client.query('COMMIT');
+    await dispatch(() => notifyParents(test, [req.user.student_id]), 'result_parent');
     res.json({ score, correct: responses.filter((r) => r.is_correct).length, total: responses.length, late });
   } catch (err) {
     await client.query('ROLLBACK');

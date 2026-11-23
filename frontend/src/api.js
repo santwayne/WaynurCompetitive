@@ -16,9 +16,12 @@ export async function api(path, { method = 'GET', body } = {}) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
-  if (res.status === 401 && s) { setSession(null); window.location.assign('/login'); }
+  if (res.status === 401 && s) { setSession(null); window.location.assign(s.kind === 'super_admin' ? '/admin/login' : '/login'); }
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   return data;
 }
 
 export const KIND_LABEL = { exit_ticket: 'Exit ticket', scheduled: 'Scheduled test', retest: 'Re-test' };
+
+export const PLAN_LABEL = { trial: 'Trial', basic: 'Basic (no AI)', ai: 'AI' };
+export const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '–');

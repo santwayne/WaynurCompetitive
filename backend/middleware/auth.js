@@ -18,6 +18,27 @@ export function signToken(payload) {
   return jwt.sign(payload, secret(), { expiresIn: TOKEN_TTL });
 }
 
+// WhatsApp links open the app already logged in as that student, straight
+// at a test or practice set. They only work for 72 hours and only for that
+// one student; a forwarded link gives no more than the student had.
+const MAGIC_TTL = process.env.MAGIC_LINK_TTL || '72h';
+export function signMagic({ student_id, centre_id, path }) {
+  return jwt.sign({ kind: 'magic', student_id, centre_id, path }, secret(), { expiresIn: MAGIC_TTL });
+}
+export function verifyMagic(token) {
+  const p = jwt.verify(String(token || ''), secret(), { algorithms: ['HS256'] });
+  if (p.kind !== 'magic') throw new Error('Not a login link');
+  return p;
+}
+
+// Shared check for staff/student tokens: centre active and its plan not expired.
+export async function centreBlock(centreId) {
+  const { rows } = await pool.query('SELECT status, valid_until < current_date AS expired FROM centres WHERE id = $1', [centreId]);
+  if (!rows.length || rows[0].status !== 'active') return 'This centre is suspended. Please contact Waynur.';
+  if (rows[0].expired) return "This centre's plan has ended. Please contact Waynur to renew.";
+  return null;
+}
+
 export async function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
@@ -29,8 +50,14 @@ export async function requireAuth(req, res, next) {
     return res.status(401).json({ error: 'Your session has ended, please log in again' });
   }
   try {
-    const { rows } = await pool.query('SELECT status FROM centres WHERE id = $1', [payload.centre_id]);
-    if (!rows.length || rows[0].status !== 'active') return res.status(403).json({ error: 'This centre is suspended.' });
+    if (payload.kind === 'super_admin') {
+      const a = await pool.query('SELECT 1 FROM super_admins WHERE id = $1', [payload.admin_id]);
+      if (!a.rowCount) return res.status(401).json({ error: 'Invalid session' });
+      req.user = payload;
+      return next();
+    }
+    const blocked = await centreBlock(payload.centre_id);
+    if (blocked) return res.status(403).json({ error: blocked });
     if (payload.kind === 'staff') {
       const u = await pool.query('SELECT active FROM users WHERE id = $1 AND centre_id = $2', [payload.user_id, payload.centre_id]);
       if (!u.rows[0]?.active) return res.status(401).json({ error: 'This account is not active' });
@@ -57,6 +84,11 @@ export function requireLead(req, res, next) {
   if (req.user?.kind !== 'staff' || !['owner', 'academic_head'].includes(req.user.role)) {
     return res.status(403).json({ error: 'Owner or academic head only' });
   }
+  next();
+}
+
+export function requireSuperAdmin(req, res, next) {
+  if (req.user?.kind !== 'super_admin') return res.status(403).json({ error: 'Super Admin only' });
   next();
 }
 

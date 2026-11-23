@@ -178,6 +178,84 @@ CREATE TABLE IF NOT EXISTS ai_usage (
 );
 CREATE INDEX IF NOT EXISTS ai_usage_centre_day ON ai_usage (centre_id, created_at);
 
+-- ── Super Admin (the Waynur team) ─────────────────────────────────────────
+-- Not tied to any centre. Created with scripts/createSuperAdmin.js.
+CREATE TABLE IF NOT EXISTS super_admins (
+  id             SERIAL PRIMARY KEY,
+  name           TEXT NOT NULL,
+  email          TEXT NOT NULL UNIQUE,
+  password_hash  TEXT NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Plan and limits per centre, set from the Super Admin panel.
+ALTER TABLE centres ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'trial';
+ALTER TABLE centres ADD COLUMN IF NOT EXISTS student_limit INT;            -- NULL = no limit
+ALTER TABLE centres ADD COLUMN IF NOT EXISTS valid_until DATE;             -- NULL = no end date
+ALTER TABLE centres ADD COLUMN IF NOT EXISTS ai_daily_limit INT;           -- NULL = AI_DAILY_LIMIT_PER_CENTRE
+ALTER TABLE centres ADD COLUMN IF NOT EXISTS contact_phone TEXT;
+ALTER TABLE centres ADD COLUMN IF NOT EXISTS admin_notes TEXT;
+DO $$ BEGIN
+  ALTER TABLE centres ADD CONSTRAINT centres_plan_check CHECK (plan IN ('trial', 'basic', 'ai'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Parents get results on WhatsApp.
+ALTER TABLE students ADD COLUMN IF NOT EXISTS parent_name TEXT;
+ALTER TABLE students ADD COLUMN IF NOT EXISTS parent_phone TEXT;
+CREATE INDEX IF NOT EXISTS students_parent_phone ON students (centre_id, parent_phone);
+CREATE INDEX IF NOT EXISTS users_phone ON users (centre_id, phone);
+
+-- ── WhatsApp (same model as Waynur) ───────────────────────────────────────
+-- Every centre sends from ITS OWN WhatsApp Business number. The Super Admin
+-- adds the Phone Number ID + a permanent access token; the token is stored
+-- encrypted (services/secretBox.js) and is never returned by any API.
+CREATE TABLE IF NOT EXISTS centre_whatsapp (
+  centre_id         INT PRIMARY KEY REFERENCES centres(id) ON DELETE CASCADE,
+  display_number    TEXT NOT NULL,
+  phone_number_id   TEXT NOT NULL UNIQUE,
+  waba_id           TEXT,
+  verified_name     TEXT,
+  access_token_enc  TEXT NOT NULL,
+  token_hint        TEXT,
+  connected_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  connected_by      INT REFERENCES super_admins(id) ON DELETE SET NULL
+);
+
+-- Every message in or out. Outgoing rows with a ref are unique per
+-- recipient, so pressing "send" twice never messages anyone twice.
+CREATE TABLE IF NOT EXISTS whatsapp_messages (
+  id             SERIAL PRIMARY KEY,
+  centre_id      INT NOT NULL REFERENCES centres(id) ON DELETE CASCADE,
+  direction      TEXT NOT NULL CHECK (direction IN ('out', 'in')),
+  phone          TEXT NOT NULL,           -- 10-digit Indian mobile
+  kind           TEXT NOT NULL,           -- test_open, practice, result_parent, teacher_report, otp, reply, inbound
+  ref_type       TEXT,
+  ref_id         INT,
+  template       TEXT,
+  body           TEXT,
+  status         TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'sent', 'delivered', 'read', 'failed', 'skipped', 'received')),
+  error          TEXT,
+  wa_message_id  TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS whatsapp_messages_once
+  ON whatsapp_messages (centre_id, kind, ref_type, ref_id, phone) WHERE direction = 'out' AND ref_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS whatsapp_messages_centre ON whatsapp_messages (centre_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS whatsapp_messages_wamid ON whatsapp_messages (wa_message_id);
+
+-- Student login codes sent on WhatsApp (hashed, 10 minutes, 5 tries).
+CREATE TABLE IF NOT EXISTS login_codes (
+  id          SERIAL PRIMARY KEY,
+  centre_id   INT NOT NULL REFERENCES centres(id) ON DELETE CASCADE,
+  phone       TEXT NOT NULL,
+  code_hash   TEXT NOT NULL,
+  attempts    INT NOT NULL DEFAULT 0,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  used_at     TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS login_codes_lookup ON login_codes (centre_id, phone, created_at DESC);
+
 -- Shared exam-pattern templates. Check marks and timing against each new
 -- official notification before a batch relies on them; centres can add their own.
 INSERT INTO exam_patterns (centre_id, code, name, version, duration_min, marks_correct, marks_wrong, sections) VALUES

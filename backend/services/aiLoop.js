@@ -12,7 +12,10 @@ async function takeQuota(centreId, feature) {
   const { rows } = await pool.query(
     `SELECT count(*)::int AS n FROM ai_usage WHERE centre_id = $1 AND created_at > now() - interval '1 day'`, [centreId]
   );
-  if (rows[0].n >= DAILY_LIMIT) return false;
+  const c = await pool.query('SELECT plan, ai_daily_limit FROM centres WHERE id = $1', [centreId]);
+  if (c.rows[0]?.plan === 'basic') return false; // the Basic plan has no AI
+  const limit = c.rows[0]?.ai_daily_limit ?? DAILY_LIMIT;
+  if (rows[0].n >= limit) return false;
   await pool.query('INSERT INTO ai_usage (centre_id, feature) VALUES ($1, $2)', [centreId, feature]);
   return true;
 }
@@ -49,11 +52,12 @@ const HINT_RULES = 'You are a patient tutor at an Indian government-exam coachin
 
 /** A guided hint for one practice question. Falls back to the first step of the centre's explanation. */
 export async function hintFor(centreId, question, topicNotes, studentNote = '') {
+  // Without AI the hint comes from the centre's topic notes (the method),
+  // never from the question's explanation, which usually gives the answer away.
   const fallback = () => {
-    const exp = String(question.explanation || '').trim();
-    if (!exp) return 'Read the question again and write down what is given and what is asked. Which formula links them?';
-    const first = exp.split(/(?<=[.!?।])\s+/)[0];
-    return `Start here: ${first}`;
+    const notes = String(topicNotes || '').trim();
+    if (notes) return `Method: ${notes.split(/(?<=[.!?।])\s+/).slice(0, 2).join(' ')}`;
+    return 'Read the question again and write down what is given and what is asked. Which formula or rule links them?';
   };
   if (!(await takeQuota(centreId, 'hint'))) return { hint: fallback(), ai: false };
   const out = await askJSON({

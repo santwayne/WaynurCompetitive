@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Waynur Competitive</string>
+    <string name="title_activity_main">Waynur Competitive</string>
+    <string name="package_name">com.waynur.competitive</string>
+    <string name="custom_url_scheme">com.waynur.competitive</string>
+</resources>
