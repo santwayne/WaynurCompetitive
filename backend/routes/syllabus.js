@@ -56,13 +56,28 @@ router.get('/topics', route(async (req, res) => {
   res.json({ topics: rows });
 }));
 
+// "Maths / Percentage" and "math / Percentages " are the same topic: the
+// match ignores case, spaces, punctuation and a plural "s", so weak-topic
+// reports are not split across near-duplicates. The first spelling stays.
+export function topicKey(v) {
+  return String(v ?? '').toLowerCase().replace(/&/g, ' and ').split(/[^a-z0-9]+/)
+    .filter(Boolean).map((w) => (w.length > 3 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w)).join(' ');
+}
+
 async function ensureTopic(db, centreId, subject, name) {
-  const s = text(subject, 'Subject', { max: 80 });
-  const n = text(name, 'Topic', { max: 120 });
+  const s = text(subject, 'Subject', { max: 80 }).replace(/\s+/g, ' ');
+  const n = text(name, 'Topic', { max: 120 }).replace(/\s+/g, ' ');
+  const { rows: all } = await db.query('SELECT id, subject, name FROM topics WHERE centre_id = $1 ORDER BY id', [centreId]);
+  const sk = topicKey(s);
+  const nk = topicKey(n);
+  const same = all.find((t) => topicKey(t.subject) === sk && topicKey(t.name) === nk);
+  if (same) return same.id;
+  // A known subject keeps its first spelling too ("math" → "Maths").
+  const subj = all.find((t) => topicKey(t.subject) === sk)?.subject ?? s;
   const { rows } = await db.query(
     `INSERT INTO topics (centre_id, subject, name) VALUES ($1,$2,$3)
      ON CONFLICT (centre_id, subject, name) DO UPDATE SET subject = EXCLUDED.subject RETURNING id`,
-    [centreId, s, n]
+    [centreId, subj, n]
   );
   return rows[0].id;
 }
@@ -84,13 +99,49 @@ router.patch('/topics/:id', route(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// POST /api/syllabus/topics/merge — { fromId, intoId } (owner / academic head).
+// Fixes duplicates made before the matching above: questions, re-teach notes
+// and practice move to "into", then "from" is deleted.
+router.post('/topics/merge', requireLead, route(async (req, res) => {
+  const fromId = await ownTopic(req.user.centre_id, req.body.fromId);
+  const intoId = await ownTopic(req.user.centre_id, req.body.intoId);
+  if (fromId === intoId) throw bad('Pick two different topics');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const moved = await client.query('UPDATE questions SET topic_id = $1 WHERE topic_id = $2 AND centre_id = $3', [intoId, fromId, req.user.centre_id]);
+    // One re-teach / practice row per test and topic: where both topics have
+    // one for the same test, keep the one already on "into".
+    await client.query(
+      `DELETE FROM interventions f USING interventions i
+        WHERE f.topic_id = $1 AND i.topic_id = $2 AND f.test_id = i.test_id AND f.kind = i.kind`, [fromId, intoId]);
+    await client.query('UPDATE interventions SET topic_id = $1 WHERE topic_id = $2', [intoId, fromId]);
+    await client.query(
+      `UPDATE topics SET notes = CASE WHEN COALESCE(notes, '') = '' THEN (SELECT notes FROM topics WHERE id = $2)
+                                      ELSE notes END WHERE id = $1`, [intoId, fromId]);
+    await client.query('DELETE FROM topics WHERE id = $1', [fromId]);
+    await client.query('COMMIT');
+    res.json({ ok: true, questions_moved: moved.rowCount });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}));
+
 // ── Questions ────────────────────────────────────────────────────────────
+const DIFFICULTY = { 1: 1, 2: 2, 3: 3, easy: 1, medium: 2, hard: 3 };
 function questionFields(b) {
   const options = Array.isArray(b.options) ? b.options.map((o) => String(o ?? '').trim()).filter(Boolean) : [];
   if (options.length < 2 || options.length > 6) throw bad('A question needs 2 to 6 options');
-  const correct = Number(b.correctIndex);
-  if (!Number.isInteger(correct) || correct < 0 || correct >= options.length) throw bad('Pick which option is correct');
-  const difficulty = [1, 2, 3].includes(Number(b.difficulty)) ? Number(b.difficulty) : 2;
+  // No default answer: a question saved without choosing one would mark students wrong.
+  const raw = b.correctIndex;
+  const correct = raw === null || raw === undefined || raw === '' ? NaN : Number(raw);
+  if (!Number.isInteger(correct) || correct < 0 || correct >= options.length) throw bad('Pick which option is the correct answer');
+  const d = String(b.difficulty ?? '').trim().toLowerCase();
+  if (d && !(d in DIFFICULTY)) throw bad('Difficulty must be 1 (easy), 2 (medium) or 3 (hard)');
+  const difficulty = d ? DIFFICULTY[d] : 2;
   return {
     stem: text(b.stem, 'Question', { max: 4000 }),
     options,
@@ -143,8 +194,8 @@ router.put('/questions/:id', route(async (req, res) => {
   const status = initialStatus(req.user);
   const { rowCount } = await pool.query(
     `UPDATE questions SET topic_id=$1, stem=$2, options=$3, correct_index=$4, explanation=$5, difficulty=$6,
-            status = CASE WHEN status = 'retired' THEN 'retired' ELSE $7 END,
-            approved_by = CASE WHEN $7 = 'approved' THEN $8 ELSE NULL END
+            status = CASE WHEN status = 'retired' THEN 'retired' ELSE $7::text END,
+            approved_by = CASE WHEN $7::text = 'approved' THEN $8::int ELSE NULL END
       WHERE id = $9 AND centre_id = $10`,
     [topicId, f.stem, JSON.stringify(f.options), f.correct, f.explanation, f.difficulty, status, req.user.user_id,
       intId(req.params.id, 'question'), req.user.centre_id]
@@ -181,6 +232,7 @@ router.post('/questions/import', route(async (req, res) => {
       try {
         const options = ['option_a', 'option_b', 'option_c', 'option_d', 'option_e', 'option_f'].map((k) => r[k]).filter(Boolean);
         const ans = String(r.answer || '').trim().toUpperCase();
+        if (!ans) throw bad('The answer column is empty (use A, B, C or D)');
         const correctIndex = /^[A-F]$/.test(ans) ? ans.charCodeAt(0) - 65 : Number(ans) - 1;
         const f = questionFields({ stem: r.question, options, correctIndex, explanation: r.explanation, difficulty: r.difficulty });
         const topicId = await ensureTopic(client, req.user.centre_id, r.subject, r.topic);
@@ -191,7 +243,7 @@ router.post('/questions/import', route(async (req, res) => {
             req.user.user_id, status === 'approved' ? req.user.user_id : null]
         );
       } catch (err) {
-        throw bad(`Row ${i + 2}: ${err.message}`);
+        throw bad(`Row ${i + 2} of the file: ${err.message}. No questions were imported. Fix this row and import the whole file again.`);
       }
     }
     await client.query('COMMIT');

@@ -27,6 +27,8 @@ router.post('/login', loginLimiter, route(async (req, res) => {
 router.use(requireAuth, requireSuperAdmin);
 
 const PLANS = ['trial', 'basic', 'ai'];
+// Local calendar day (IST on the server) as YYYY-MM-DD.
+const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 // ── Overview ─────────────────────────────────────────────────────────────
 router.get('/overview', route(async (req, res) => {
@@ -38,6 +40,7 @@ router.get('/overview', route(async (req, res) => {
       (SELECT count(*)::int FROM centres WHERE valid_until < current_date) AS expired,
       (SELECT count(*)::int FROM centres WHERE status = 'active' AND valid_until BETWEEN current_date AND current_date + 7) AS expiring_7d,
       (SELECT count(*)::int FROM centres WHERE plan = 'trial') AS on_trial,
+      (SELECT count(*)::int FROM centres WHERE valid_until IS NULL OR student_limit IS NULL) AS missing_limits,
       (SELECT count(*)::int FROM students WHERE active) AS students,
       (SELECT count(*)::int FROM tests WHERE created_at > now() - interval '30 days') AS tests_30d,
       (SELECT count(*)::int FROM attempts WHERE submitted_at > now() - interval '30 days') AS attempts_30d,
@@ -53,7 +56,7 @@ router.get('/overview', route(async (req, res) => {
 
 // ── Centres ──────────────────────────────────────────────────────────────
 const CENTRE_LIST = `
-  SELECT c.id, c.name, c.city, c.status, c.plan, c.student_limit, c.valid_until, c.ai_daily_limit, c.contact_phone, c.created_at,
+  SELECT c.id, c.code, c.name, c.city, c.status, c.plan, c.student_limit, c.valid_until, c.ai_daily_limit, c.contact_phone, c.created_at,
          (c.valid_until < current_date) AS expired,
          o.name AS owner_name, o.email AS owner_email, o.phone AS owner_phone,
          (SELECT count(*)::int FROM students s WHERE s.centre_id = c.id AND s.active) AS students,
@@ -70,7 +73,7 @@ const CENTRE_LIST = `
 router.get('/centres', route(async (req, res) => {
   const q = String(req.query.q || '').trim();
   const { rows } = await pool.query(
-    `${CENTRE_LIST} WHERE ($1 = '' OR c.name ILIKE '%' || $1 || '%' OR c.city ILIKE '%' || $1 || '%' OR o.email ILIKE '%' || $1 || '%')
+    `${CENTRE_LIST} WHERE ($1 = '' OR c.code = upper($1) OR c.name ILIKE '%' || $1 || '%' OR c.city ILIKE '%' || $1 || '%' OR o.email ILIKE '%' || $1 || '%')
      ORDER BY c.created_at DESC`, [q]);
   res.json({ centres: rows });
 }));
@@ -91,15 +94,26 @@ function planFields(b, current = {}) {
     if (!Number.isInteger(n) || n < 0) throw bad(`${what} must be a whole number`);
     return n;
   };
+  // Every centre needs an end date and a student limit, so nothing runs
+  // open-ended by mistake. A trial can run at most TRIAL_MAX_DAYS from today.
   let validUntil = b.validUntil !== undefined ? b.validUntil : current.valid_until ?? null;
-  if (validUntil === '') validUntil = null;
-  if (validUntil && !/^\d{4}-\d{2}-\d{2}$/.test(String(validUntil).slice(0, 10))) throw bad('Valid until must be a date (YYYY-MM-DD)');
+  if (validUntil instanceof Date) validUntil = isoDay(validUntil);
+  if (!validUntil) throw bad('Set a "Valid until" date. Every centre needs an end date.');
+  validUntil = String(validUntil).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(validUntil) || Number.isNaN(Date.parse(validUntil))) throw bad('Valid until must be a date (YYYY-MM-DD)');
+  if (plan === 'trial') {
+    const maxDays = Number(process.env.TRIAL_MAX_DAYS) || 30;
+    const max = new Date(); max.setDate(max.getDate() + maxDays);
+    if (validUntil > isoDay(max)) throw bad(`A trial can run for at most ${maxDays} days (until ${isoDay(max)}). Move the centre to a paid plan for longer.`);
+  }
   const studentLimit = num(b.studentLimit, 'Student limit');
   const aiLimit = num(b.aiDailyLimit, 'AI calls per day');
+  const limit = studentLimit === undefined ? current.student_limit ?? null : studentLimit;
+  if (limit == null || limit < 1) throw bad('Set a student limit (1 or more).');
   return {
     plan,
-    valid_until: validUntil ? String(validUntil).slice(0, 10) : null,
-    student_limit: studentLimit === undefined ? current.student_limit ?? null : studentLimit,
+    valid_until: validUntil,
+    student_limit: limit,
     ai_daily_limit: aiLimit === undefined ? current.ai_daily_limit ?? null : aiLimit,
   };
 }
@@ -124,7 +138,7 @@ router.post('/centres', route(async (req, res) => {
       [name, text(b.city, 'City', { max: 80, required: false }), f.plan, f.valid_until, f.student_limit, f.ai_daily_limit, ownerPhone,
         text(b.notes, 'Notes', { max: 2000, required: false })]);
     await client.query(
-      `INSERT INTO users (centre_id, name, email, phone, password_hash, role) VALUES ($1,$2,$3,$4,$5,'owner')`,
+      `INSERT INTO users (centre_id, name, email, phone, password_hash, role, must_change_password) VALUES ($1,$2,$3,$4,$5,'owner',true)`,
       [c.rows[0].id, text(b.ownerName, 'Owner name', { max: 120 }), ownerEmail, ownerPhone, await bcrypt.hash(b.ownerPassword, 10)]);
     await client.query('COMMIT');
     res.status(201).json({ centre: await centreRow(c.rows[0].id) });
@@ -141,7 +155,7 @@ router.get('/centres/:id', route(async (req, res) => {
   const centre = await centreRow(id);
   const [staff, batches, notes, ai, wa] = await Promise.all([
     pool.query('SELECT id, name, email, phone, role, active, created_at FROM users WHERE centre_id = $1 ORDER BY role, name', [id]),
-    pool.query(`SELECT b.name, p.name AS exam_pattern, (SELECT count(*)::int FROM batch_students bs WHERE bs.batch_id = b.id) AS students
+    pool.query(`SELECT b.name, p.name AS exam_pattern, (SELECT count(*)::int FROM batch_students bs JOIN students s ON s.id = bs.student_id WHERE bs.batch_id = b.id AND s.active) AS students
                   FROM batches b LEFT JOIN exam_patterns p ON p.id = b.exam_pattern_id WHERE b.centre_id = $1 ORDER BY b.name`, [id]),
     pool.query('SELECT admin_notes FROM centres WHERE id = $1', [id]),
     pool.query(`SELECT date_trunc('day', created_at)::date AS day, count(*)::int AS n FROM ai_usage
@@ -183,7 +197,7 @@ router.patch('/centres/:id', route(async (req, res) => {
 // POST /api/admin/centres/:id/staff/:userId/password { password } — when an owner is locked out.
 router.post('/centres/:id/staff/:userId/password', route(async (req, res) => {
   if (typeof req.body.password !== 'string' || req.body.password.length < 8) throw bad('Password must be at least 8 characters');
-  const { rowCount } = await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2 AND centre_id = $3',
+  const { rowCount } = await pool.query('UPDATE users SET password_hash = $1, must_change_password = true WHERE id = $2 AND centre_id = $3',
     [await bcrypt.hash(req.body.password, 10), intId(req.params.userId, 'user'), intId(req.params.id, 'centre')]);
   if (!rowCount) throw notFound('Staff member not found');
   res.json({ ok: true });

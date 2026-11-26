@@ -17,6 +17,7 @@ import Practice from './pages/Practice.jsx';
 import WhatsApp from './pages/WhatsApp.jsx';
 import Magic from './pages/Magic.jsx';
 import AppStart from './pages/AppStart.jsx';
+import ChangePassword from './pages/ChangePassword.jsx';
 import AdminLogin from './pages/admin/AdminLogin.jsx';
 import AdminHome from './pages/admin/AdminHome.jsx';
 import AdminCentre from './pages/admin/AdminCentre.jsx';
@@ -88,7 +89,7 @@ export default function App() {
     return (
       <Routes>
         <Route path="/signup" element={<Signup />} />
-        <Route path="/s/:centreId" element={<Login student />} />
+        <Route path="/s/:centreCode" element={<Login student />} />
         <Route path="*" element={<Login />} />
       </Routes>
     );
@@ -106,6 +107,8 @@ export default function App() {
       </Shell>
     );
   }
+  // First login (or after a reset): choose your own password first.
+  if (s.mustChange || pathname === '/change-password') return <ChangePassword />;
   return (
     <Shell links={STAFF_LINKS}>
       <Routes>

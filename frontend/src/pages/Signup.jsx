@@ -13,7 +13,7 @@ export default function Signup() {
     setBusy(true); setError(null);
     try {
       const d = await api('/auth/signup', { method: 'POST', body: f });
-      setSession({ token: d.token, kind: 'staff', role: d.user.role, name: d.user.name, centre: d.user.centre.name, centreId: d.user.centre.id });
+      setSession({ token: d.token, kind: 'staff', role: d.user.role, name: d.user.name, centre: d.user.centre.name, centreId: d.user.centre.id, centreCode: d.user.centre.code });
       window.location.assign('/');
     } catch (err) { setError(err.message); setBusy(false); }
   }

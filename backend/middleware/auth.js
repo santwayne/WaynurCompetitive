@@ -39,6 +39,8 @@ export async function centreBlock(centreId) {
   return null;
 }
 
+const PASSWORD_FREE_PATHS = ['/api/auth/change-password', '/api/auth/me'];
+
 export async function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
@@ -59,8 +61,14 @@ export async function requireAuth(req, res, next) {
     const blocked = await centreBlock(payload.centre_id);
     if (blocked) return res.status(403).json({ error: blocked });
     if (payload.kind === 'staff') {
-      const u = await pool.query('SELECT active FROM users WHERE id = $1 AND centre_id = $2', [payload.user_id, payload.centre_id]);
+      const u = await pool.query('SELECT active, must_change_password, role FROM users WHERE id = $1 AND centre_id = $2', [payload.user_id, payload.centre_id]);
       if (!u.rows[0]?.active) return res.status(401).json({ error: 'This account is not active' });
+      // A password set by someone else must be changed before anything else.
+      if (u.rows[0].must_change_password && !PASSWORD_FREE_PATHS.includes(req.originalUrl.split('?')[0])) {
+        return res.status(403).json({ error: 'Please set your own password first.', code: 'must_change_password' });
+      }
+      // The role is read fresh, so a changed role applies without logging in again.
+      payload.role = u.rows[0].role;
     } else if (payload.kind === 'student') {
       const s = await pool.query('SELECT active FROM students WHERE id = $1 AND centre_id = $2', [payload.student_id, payload.centre_id]);
       if (!s.rows[0]?.active) return res.status(401).json({ error: 'This account is not active' });
@@ -83,6 +91,14 @@ export function requireStaff(req, res, next) {
 export function requireLead(req, res, next) {
   if (req.user?.kind !== 'staff' || !['owner', 'academic_head'].includes(req.user.role)) {
     return res.status(403).json({ error: 'Owner or academic head only' });
+  }
+  next();
+}
+
+// Owner only: staff accounts and their WhatsApp numbers.
+export function requireOwner(req, res, next) {
+  if (req.user?.kind !== 'staff' || req.user.role !== 'owner') {
+    return res.status(403).json({ error: 'Only the owner can do this' });
   }
   next();
 }
