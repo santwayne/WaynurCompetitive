@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { MessageCircle } from 'lucide-react';
-import { api, getSession, KIND_LABEL } from '../api.js';
+import { api, getSession, KIND_LABEL, studentLoginLink } from '../api.js';
 import { Bar, ErrorNote, Loading, Stat, useApi } from '../components/ui.jsx';
 
 const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F'];
@@ -139,7 +139,7 @@ export default function TestPage() {
   const [{ test, questions }, { diagnosis: d }, { actions }] = data;
   const reteach = actions.filter((a) => a.kind === 'reteach');
   const practice = actions.filter((a) => a.kind === 'practice');
-  const loginLink = `${window.location.origin}/s/${s.centreId}`;
+  const loginLink = studentLoginLink(s.centreCode) || 'the student login link on the Batches page';
   const avg = d.students.length ? Math.round((d.students.reduce((a, x) => a + Number(x.score), 0) / d.students.length) * 10) / 10 : null;
   const topicName = new Map(d.topics.map((t) => [t.topic_id, t.name]));
 

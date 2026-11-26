@@ -46,7 +46,8 @@ async function main() {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const c = (await client.query(`INSERT INTO centres (name, city) VALUES ('Demo Coaching Centre', 'Ludhiana') RETURNING id`)).rows[0].id;
+    const { id: c, code } = (await client.query(
+      `INSERT INTO centres (name, city, valid_until, student_limit) VALUES ('Demo Coaching Centre', 'Ludhiana', current_date + 30, 100) RETURNING id, code`)).rows[0];
     const owner = (await client.query(`INSERT INTO users (centre_id, name, email, password_hash, role) VALUES ($1,'Demo Owner',$2,$3,'owner') RETURNING id`,
       [c, OWNER.email, await bcrypt.hash(OWNER.password, 10)])).rows[0].id;
     await client.query(`INSERT INTO users (centre_id, name, email, password_hash, role) VALUES ($1,'Ravi (Quant)','demo.teacher@waynur.com',$2,'teacher')`,
@@ -73,7 +74,7 @@ async function main() {
       }
     }
     await client.query('COMMIT');
-    console.log(`Demo centre ${c} ready. Owner: ${OWNER.email} / ${OWNER.password}. Students log in at /s/${c} with phone 9876500001… (password = phone).`);
+    console.log(`Demo centre ${c} ready. Owner: ${OWNER.email} / ${OWNER.password}. Students log in at /s/${code} with phone 9876500001… (password = phone).`);
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;

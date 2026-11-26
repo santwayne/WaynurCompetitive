@@ -30,7 +30,7 @@ Each centre sends from its own WhatsApp Business number, connected by the Waynur
 Every message is logged (`whatsapp_messages`) and sent at most once per person. Without a connection, messages are logged as *skipped*. Templates to create in Meta are in `backend/services/waTemplates.js` and on the Super Admin → WhatsApp set-up page. Webhook: `https://<domain>/api/whatsapp/webhook` (needs `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET`).
 
 ## Super Admin panel (`/admin`)
-For the Waynur team: all centres with usage, create a centre + owner, plan (trial / basic / AI), valid-until date, student limit, AI calls per day, suspend, reset a staff password, connect the centre's WhatsApp (checked with Meta before saving), WhatsApp log, shared exam patterns.
+For the Waynur team: all centres with usage, create a centre + owner, plan (trial / basic / AI), valid-until date and student limit (both required; a trial runs at most `TRIAL_MAX_DAYS`, default 30), AI calls per day, suspend, reset a staff password, connect the centre's WhatsApp (checked with Meta before saving), WhatsApp log, shared exam patterns.
 
 Create the first Super Admin on the server:
 ```bash
@@ -41,9 +41,12 @@ A suspended centre, or one whose plan has ended, cannot log in (staff or student
 ## Roles
 | Who | Can |
 |---|---|
-| Owner / academic head | everything: staff, batches, approving questions, tests |
+| Owner | everything, and only the owner adds staff and changes staff WhatsApp numbers |
+| Academic head | batches, approving and merging questions/topics, tests (not staff) |
 | Teacher | batches, tests, diagnosis, next-class plan; questions they add stay drafts until approved |
-| Student | logs in at `/s/<centreId>` with mobile number (password = mobile number until changed); takes tests, sees results, does practice |
+| Student | logs in at `/s/<centre code>` (a random 6-character code, shown on the Batches page) with mobile number (password = mobile number until changed); takes tests, sees results, does practice |
+
+Staff whose password was set by someone else (the owner, or the Super Admin) must choose their own on first login. Teachers see colleagues' names and roles, not their emails and numbers.
 
 ## Run locally
 ```bash
@@ -77,7 +80,9 @@ nginx should serve `frontend/dist` and send `/api/` to `127.0.0.1:4100`. Set `CO
 
 ## CSV formats
 - Students (into a batch): `name,phone,roll_no,parent_phone,parent_name` (parent columns optional)
-- Questions: `subject,topic,question,option_a,option_b,option_c,option_d,answer,explanation,difficulty` (answer = A–D)
+- Questions: `subject,topic,question,option_a,option_b,option_c,option_d,answer,explanation,difficulty` (answer = A–D, required; difficulty = 1 easy / 2 medium / 3 hard, or the words, empty = medium)
+
+Topics match ignoring case, spaces and a plural "s" ("Maths / Percentage" = "math / Percentages"); older duplicates can be merged on the Question bank page.
 
 Imports are all-or-nothing, and errors name the row (e.g. "Row 7: phone is not a 10-digit mobile number").
 

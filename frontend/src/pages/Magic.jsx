@@ -10,7 +10,7 @@ export default function Magic() {
   useEffect(() => {
     api('/auth/magic', { method: 'POST', body: { token } })
       .then((d) => {
-        setSession({ token: d.token, kind: 'student', name: d.student.name, centre: d.student.centre.name, centreId: d.student.centre.id });
+        setSession({ token: d.token, kind: 'student', name: d.student.name, centre: d.student.centre.name, centreId: d.student.centre.id, centreCode: d.student.centre.code });
         window.location.replace(d.path || '/');
       })
       .catch((e) => setError(e.message));

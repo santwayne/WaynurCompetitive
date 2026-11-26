@@ -98,7 +98,7 @@ export async function notifyTeacher(test) {
   const name = await centreName(test.centre_id);
   const sub = (await pool.query(
     `SELECT (SELECT count(*)::int FROM attempts WHERE test_id = $1 AND submitted_at IS NOT NULL) AS done,
-            (SELECT count(*)::int FROM batch_students WHERE batch_id = $2) AS total`, [test.id, test.batch_id])).rows[0];
+            (SELECT count(*)::int FROM batch_students bs JOIN students s ON s.id = bs.student_id WHERE bs.batch_id = $2 AND s.active) AS total`, [test.id, test.batch_id])).rows[0];
   const { rows: re } = await pool.query(
     `SELECT t.name, i.accuracy FROM interventions i JOIN topics t ON t.id = i.topic_id
       WHERE i.test_id = $1 AND i.kind = 'reteach' ORDER BY i.accuracy NULLS LAST`, [test.id]);

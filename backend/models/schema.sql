@@ -256,6 +256,22 @@ CREATE TABLE IF NOT EXISTS login_codes (
 );
 CREATE INDEX IF NOT EXISTS login_codes_lookup ON login_codes (centre_id, phone, created_at DESC);
 
+-- ── QA fixes (Nov 2026) ───────────────────────────────────────────────────
+-- Centre code: a random 6-character code for the student login link and the
+-- app (was the plain centre id, e.g. "3", which anyone could guess).
+CREATE OR REPLACE FUNCTION wc_centre_code() RETURNS text LANGUAGE sql VOLATILE AS $$
+  SELECT string_agg(substr('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 1 + floor(random() * 32)::int, 1), '')
+    FROM generate_series(1, 6)
+$$;
+ALTER TABLE centres ADD COLUMN IF NOT EXISTS code TEXT;
+ALTER TABLE centres ALTER COLUMN code SET DEFAULT wc_centre_code();
+UPDATE centres SET code = wc_centre_code() WHERE code IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS centres_code ON centres (code);
+
+-- Staff whose password was set by someone else (owner, Super Admin) must
+-- choose their own on first login.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false;
+
 -- Shared exam-pattern templates. Check marks and timing against each new
 -- official notification before a batch relies on them; centres can add their own.
 INSERT INTO exam_patterns (centre_id, code, name, version, duration_min, marks_correct, marks_wrong, sections) VALUES

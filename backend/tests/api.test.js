@@ -35,6 +35,7 @@ test('owner signs up a centre and sees the SSC / RRB templates', { skip }, async
   assert.equal(res.status, 201, JSON.stringify(res.body));
   S.owner = res.body.token;
   S.centreId = res.body.user.centre.id;
+  S.code = res.body.user.centre.code;
   const p = await request(app).get('/api/syllabus/exam-patterns').set(auth(S.owner));
   const cgl = p.body.patterns.find((x) => x.code === 'SSC-CGL-T1');
   assert.equal(Number(cgl.marks_wrong), 0.5);
@@ -61,6 +62,7 @@ test('batch, students from CSV (one bad row rejects the file), teacher account',
   const t = await request(app).post('/api/centre/staff').set(auth(S.owner)).send({ name: 'Ravi', email: 'ravi@gill.in', password: 'password123', role: 'teacher' });
   assert.equal(t.status, 201);
   S.teacher = (await request(app).post('/api/auth/login').send({ email: 'ravi@gill.in', password: 'password123' })).body.token;
+  assert.equal((await request(app).post('/api/auth/change-password').set(auth(S.teacher)).send({ currentPassword: 'password123', newPassword: 'ravi-own-pass' })).status, 200);
   assert.equal((await request(app).post('/api/centre/staff').set(auth(S.teacher)).send({ name: 'Z', email: 'z@gill.in', password: 'password123' })).status, 403);
 });
 
@@ -100,7 +102,7 @@ test('a test uses approved questions only and takes marks from the exam pattern'
 });
 
 async function studentToken(phone) {
-  const res = await request(app).post('/api/auth/student-login').send({ centreId: S.centreId, phone, password: phone });
+  const res = await request(app).post('/api/auth/student-login').send({ centreCode: S.code, phone, password: phone });
   assert.equal(res.status, 200, JSON.stringify(res.body));
   return res.body.token;
 }
@@ -221,6 +223,6 @@ test('another centre sees none of this', { skip }, async () => {
   assert.equal((await request(app).get(`/api/centre/batches/${S.batch}`).set(auth(other))).status, 404);
   assert.deepEqual((await request(app).get('/api/syllabus/questions').set(auth(other))).body.questions, []);
   assert.equal((await request(app).post('/api/tests').set(auth(other)).send({ batchId: S.batch, title: 'x', kind: 'scheduled', questionIds: [1] })).status, 404);
-  const login = await request(app).post('/api/auth/student-login').send({ centreId: S.centreId + 1, phone: '9876500001', password: '9876500001' });
+  const login = await request(app).post('/api/auth/student-login').send({ centreCode: 'ZZZZZZ', phone: '9876500001', password: '9876500001' });
   assert.equal(login.status, 401, 'a student belongs to one centre only');
 });

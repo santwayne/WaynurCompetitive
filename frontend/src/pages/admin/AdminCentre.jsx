@@ -27,15 +27,16 @@ function PlanForm({ centre, onSaved }) {
   return (
     <form onSubmit={save} className="card grid gap-3 sm:grid-cols-2">
       <h2 className="h2 sm:col-span-2">Plan and access</h2>
-      <div className="sm:col-span-2"><ErrorNote error={err} />{ok && <p className="text-sm text-green-700">Saved.</p>}</div>
+      <div className="sm:col-span-2"><ErrorNote error={err} />{ok && <p className="text-sm text-green-700">Saved.</p>}
+        {(!centre.valid_until || centre.student_limit == null) && <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">This centre has no {!centre.valid_until ? 'end date' : ''}{!centre.valid_until && centre.student_limit == null ? ' and no ' : ''}{centre.student_limit == null ? 'student limit' : ''}. Set {!centre.valid_until && centre.student_limit == null ? 'them' : 'it'} and save.</p>}</div>
       <div><label className="label" htmlFor="pn">Centre name</label><input id="pn" className="input" value={f.name} onChange={set('name')} required /></div>
       <div><label className="label" htmlFor="pc">City</label><input id="pc" className="input" value={f.city} onChange={set('city')} /></div>
       <div><label className="label" htmlFor="pp">Plan</label>
         <select id="pp" className="input" value={f.plan} onChange={set('plan')}>{Object.entries(PLAN_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
       <div><label className="label" htmlFor="ps">Status</label>
         <select id="ps" className="input" value={f.status} onChange={set('status')}><option value="active">Active</option><option value="suspended">Suspended (no one can log in)</option></select></div>
-      <div><label className="label" htmlFor="pv">Valid until</label><input id="pv" type="date" className="input" value={f.validUntil} onChange={set('validUntil')} /></div>
-      <div><label className="label" htmlFor="pl">Student limit</label><input id="pl" className="input" inputMode="numeric" value={f.studentLimit} onChange={set('studentLimit')} placeholder="blank = no limit" /></div>
+      <div><label className="label" htmlFor="pv">Valid until</label><input id="pv" type="date" className="input" value={f.validUntil} onChange={set('validUntil')} required /><p className="mt-1 text-xs text-ink-soft">Required. A trial can run at most 30 days.</p></div>
+      <div><label className="label" htmlFor="pl">Student limit</label><input id="pl" className="input" inputMode="numeric" value={f.studentLimit} onChange={set('studentLimit')} placeholder="e.g. 100" required /></div>
       <div><label className="label" htmlFor="pa">AI calls per day</label><input id="pa" className="input" inputMode="numeric" value={f.aiDailyLimit} onChange={set('aiDailyLimit')} placeholder="blank = server default" /></div>
       <div><label className="label" htmlFor="pph">Contact number</label><input id="pph" className="input" inputMode="tel" value={f.contactPhone} onChange={set('contactPhone')} /></div>
       <div className="sm:col-span-2"><label className="label" htmlFor="pno">Notes (only the Waynur team sees these)</label><textarea id="pno" className="input h-20" value={f.notes} onChange={set('notes')} /></div>
@@ -65,11 +66,13 @@ function WhatsAppForm({ centreId, info, onSaved }) {
       </div>
       <p className="text-sm text-ink-soft">The centre's own WhatsApp Business number. Keys are checked with Meta before saving; the token is stored encrypted and never shown again{info.token_hint ? ` (saved: ${info.token_hint})` : ''}.</p>
       <ErrorNote error={err} />{msg && <p className="text-sm text-green-700">{msg}</p>}
-      <form className="grid gap-3 sm:grid-cols-2" onSubmit={(e) => { e.preventDefault(); run(async () => { await api(`/admin/centres/${centreId}/whatsapp`, { method: 'PUT', body: f }); setF({ ...f, accessToken: '' }); setMsg('Connected. Meta accepted the keys.'); onSaved(); }); }}>
-        <div><label className="label" htmlFor="wn">WhatsApp Business number</label><input id="wn" className="input" value={f.number} onChange={set('number')} placeholder="+91 98140 00000" required /></div>
-        <div><label className="label" htmlFor="wp">Phone Number ID</label><input id="wp" className="input" inputMode="numeric" value={f.phoneNumberId} onChange={set('phoneNumberId')} required /></div>
-        <div><label className="label" htmlFor="ww">WhatsApp Business Account ID</label><input id="ww" className="input" inputMode="numeric" value={f.wabaId} onChange={set('wabaId')} /></div>
-        <div><label className="label" htmlFor="wt">Permanent access token</label><input id="wt" type="password" className="input" autoComplete="off" value={f.accessToken} onChange={set('accessToken')} placeholder={info.connected ? 'leave blank to keep the saved one' : ''} required={!info.connected} /></div>
+      {/* Not a login form: no password-type field, autofill off, so Chrome neither fills the
+          admin email/password here nor offers to save the token as a password. */}
+      <form className="grid gap-3 sm:grid-cols-2" autoComplete="off" data-lpignore="true" onSubmit={(e) => { e.preventDefault(); run(async () => { await api(`/admin/centres/${centreId}/whatsapp`, { method: 'PUT', body: f }); setF({ ...f, accessToken: '' }); setMsg('Connected. Meta accepted the keys.'); onSaved(); }); }}>
+        <div><label className="label" htmlFor="wn">WhatsApp Business number</label><input id="wn" name="wa-display-number" className="input" inputMode="tel" autoComplete="off" data-lpignore="true" value={f.number} onChange={set('number')} placeholder="+91 98140 00000" required /></div>
+        <div><label className="label" htmlFor="wp">Phone Number ID</label><input id="wp" name="wa-phone-number-id" className="input" inputMode="numeric" autoComplete="off" data-lpignore="true" value={f.phoneNumberId} onChange={set('phoneNumberId')} required /></div>
+        <div><label className="label" htmlFor="ww">WhatsApp Business Account ID</label><input id="ww" name="wa-business-account-id" className="input" inputMode="numeric" autoComplete="off" data-lpignore="true" value={f.wabaId} onChange={set('wabaId')} /></div>
+        <div><label className="label" htmlFor="wt">Permanent access token</label><input id="wt" name="wa-access-token" type="text" className="input font-mono" style={{ WebkitTextSecurity: 'disc' }} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} data-lpignore="true" data-1p-ignore="true" value={f.accessToken} onChange={set('accessToken')} placeholder={info.connected ? 'leave blank to keep the saved one' : ''} required={!info.connected} /></div>
         <div className="flex flex-wrap gap-2 sm:col-span-2">
           <button className="btn-primary" disabled={busy}>{busy ? 'Checking with Meta…' : info.connected ? 'Update' : 'Connect'}</button>
           {info.connected && <button type="button" className="btn-ghost" disabled={busy} onClick={() => window.confirm('Disconnect WhatsApp? Nothing will be sent until it is connected again.') && run(async () => { await api(`/admin/centres/${centreId}/whatsapp`, { method: 'DELETE' }); onSaved(); })}>Disconnect</button>}
@@ -77,7 +80,7 @@ function WhatsAppForm({ centreId, info, onSaved }) {
       </form>
       {info.connected && (
         <form className="flex flex-wrap items-end gap-2 border-t border-border pt-3" onSubmit={(e) => { e.preventDefault(); run(async () => { const r = await api(`/admin/centres/${centreId}/whatsapp/test`, { method: 'POST', body: { phone: testPhone } }); if (r.status !== 'sent') throw new Error(r.error || `Not sent (${r.status})`); setMsg('Test message sent.'); }); }}>
-          <div><label className="label" htmlFor="tp">Send a test message to</label><input id="tp" className="input" inputMode="tel" value={testPhone} onChange={(e) => setTestPhone(e.target.value)} required /></div>
+          <div><label className="label" htmlFor="tp">Send a test message to</label><input id="tp" className="input" inputMode="tel" autoComplete="off" value={testPhone} onChange={(e) => setTestPhone(e.target.value)} required /></div>
           <button className="btn-ghost" disabled={busy}>Send test</button>
           <p className="w-full text-xs text-ink-soft">First send "hi" to the centre's number from that phone: Meta only allows plain messages within 24 hours of the person writing.</p>
         </form>
@@ -93,7 +96,7 @@ function Staff({ centreId, staff }) {
     const pw = window.prompt(`New password for ${u.name} (8+ characters):`);
     if (!pw) return;
     setErr(null); setMsg(null);
-    try { await api(`/admin/centres/${centreId}/staff/${u.id}/password`, { method: 'POST', body: { password: pw } }); setMsg(`Password changed for ${u.name}. Share it with them privately.`); }
+    try { await api(`/admin/centres/${centreId}/staff/${u.id}/password`, { method: 'POST', body: { password: pw } }); setMsg(`Password changed for ${u.name}. Share it with them privately; they must set their own when they next log in.`); }
     catch (x) { setErr(x.message); }
   }
   return (
@@ -144,13 +147,13 @@ export default function AdminCentre() {
   const { centre: c, staff, batches, ai_by_day: ai, whatsapp_30d: wa, whatsapp } = data;
   const waSent = wa.filter((x) => ['sent', 'delivered', 'read'].includes(x.status)).reduce((a, x) => a + x.n, 0);
   const waFailed = wa.filter((x) => x.status === 'failed').reduce((a, x) => a + x.n, 0);
-  const studentLink = `${window.location.origin}/s/${c.id}`;
+  const studentLink = `${window.location.origin}/s/${c.code}`;
   return (
     <div className="space-y-6">
       <div>
         <Link to="/admin" className="text-sm text-ink-soft">← Centres</Link>
         <h1 className="h1">{c.name}</h1>
-        <p className="text-sm text-ink-soft">{c.city || '–'} · since {fmtDate(c.created_at)} · student login <code className="rounded bg-secondary px-1">{studentLink}</code></p>
+        <p className="text-sm text-ink-soft">{c.city || '–'} · since {fmtDate(c.created_at)} · centre code <code className="rounded bg-secondary px-1 font-semibold tracking-widest">{c.code}</code> · student login <code className="rounded bg-secondary px-1">{studentLink}</code></p>
       </div>
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Students" value={c.student_limit != null ? `${c.students} / ${c.student_limit}` : c.students} hint={`${c.staff} staff · ${c.batches} batches`} />

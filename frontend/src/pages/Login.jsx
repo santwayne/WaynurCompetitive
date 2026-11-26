@@ -3,10 +3,10 @@ import { Link, useParams } from 'react-router-dom';
 import { api, setSession } from '../api.js';
 import { ErrorNote } from '../components/ui.jsx';
 
-// Staff log in with email. Students open their centre's link (/s/<centreId>)
+// Staff log in with email. Students open their centre's link (/s/<centre code>)
 // and log in with their mobile number.
 export default function Login({ student = false }) {
-  const { centreId } = useParams();
+  const { centreCode } = useParams();
   const [centre, setCentre] = useState(null);
   const [form, setForm] = useState({ email: '', phone: '', password: '', code: '' });
   const [otp, setOtp] = useState(null); // null = password login; 'ask' = get a code; 'sent' = enter the code
@@ -14,26 +14,26 @@ export default function Login({ student = false }) {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
-    if (student) api(`/auth/centre/${centreId}`).then((d) => setCentre(d.centre)).catch((e) => setError(e.message));
-  }, [student, centreId]);
+    if (student) api(`/auth/centre/${encodeURIComponent(centreCode)}`).then((d) => setCentre(d.centre)).catch((e) => setError(e.message));
+  }, [student, centreCode]);
 
   async function submit(e) {
     e.preventDefault();
     setBusy(true); setError(null);
     try {
       if (student && otp === 'ask') {
-        const d = await api('/auth/student-otp', { method: 'POST', body: { centreId: Number(centreId), phone: form.phone } });
+        const d = await api('/auth/student-otp', { method: 'POST', body: { centreCode, phone: form.phone } });
         setNote(d.message); setOtp('sent'); setBusy(false);
         return;
       }
       if (student) {
         const d = otp === 'sent'
-          ? await api('/auth/student-otp/verify', { method: 'POST', body: { centreId: Number(centreId), phone: form.phone, code: form.code } })
-          : await api('/auth/student-login', { method: 'POST', body: { centreId: Number(centreId), phone: form.phone, password: form.password } });
-        setSession({ token: d.token, kind: 'student', name: d.student.name, centre: d.student.centre.name, centreId: d.student.centre.id });
+          ? await api('/auth/student-otp/verify', { method: 'POST', body: { centreCode, phone: form.phone, code: form.code } })
+          : await api('/auth/student-login', { method: 'POST', body: { centreCode, phone: form.phone, password: form.password } });
+        setSession({ token: d.token, kind: 'student', name: d.student.name, centre: d.student.centre.name, centreId: d.student.centre.id, centreCode: d.student.centre.code });
       } else {
         const d = await api('/auth/login', { method: 'POST', body: { email: form.email, password: form.password } });
-        setSession({ token: d.token, kind: 'staff', role: d.user.role, name: d.user.name, centre: d.user.centre.name, centreId: d.user.centre.id });
+        setSession({ token: d.token, kind: 'staff', role: d.user.role, name: d.user.name, centre: d.user.centre.name, centreId: d.user.centre.id, centreCode: d.user.centre.code, mustChange: d.user.must_change_password });
       }
       window.location.assign('/');
     } catch (err) { setError(err.message); setBusy(false); }

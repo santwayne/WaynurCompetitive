@@ -51,7 +51,7 @@ async function teacherCommand(centre, user, text) {
     const { rows } = await pool.query(
       `SELECT t.id, t.title, t.status, b.name AS batch,
               (SELECT count(*)::int FROM attempts a WHERE a.test_id = t.id AND a.submitted_at IS NOT NULL) AS done,
-              (SELECT count(*)::int FROM batch_students bs WHERE bs.batch_id = t.batch_id) AS total
+              (SELECT count(*)::int FROM batch_students bs JOIN students s ON s.id = bs.student_id WHERE bs.batch_id = t.batch_id AND s.active) AS total
          FROM tests t JOIN batches b ON b.id = t.batch_id WHERE t.centre_id = $1 ORDER BY t.created_at DESC LIMIT 8`, [c]);
     if (!rows.length) return 'No tests yet. Make one in the Waynur Competitive panel.';
     return `Latest tests:\n${rows.map((t) => `#${t.id} ${t.title} (${t.batch}) ${t.status}, ${t.done}/${t.total} done`).join('\n')}\n\nReply REPORT <number> for results.`;

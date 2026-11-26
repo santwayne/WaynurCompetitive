@@ -92,11 +92,20 @@ test('admin creates a centre with owner, plan and a student limit', { skip }, as
   });
   assert.equal(c.status, 201, JSON.stringify(c.body));
   S.centre = c.body.centre.id;
+  S.code = c.body.centre.code;
+  assert.match(S.code, /^[A-Z2-9]{6}$/, 'random centre code, not the id');
   assert.equal(c.body.centre.plan, 'basic');
 
   const o = await request(app).post('/api/auth/login').send({ email: 'owner@gill.in', password: 'password123' });
   S.owner = o.body.token;
   S.ownerId = o.body.user.id;
+  // The Super Admin chose this password, so the owner must set their own first.
+  assert.equal(o.body.user.must_change_password, true);
+  const blocked = await request(app).get('/api/centre/batches').set(auth(S.owner));
+  assert.equal(blocked.status, 403);
+  assert.equal(blocked.body.code, 'must_change_password');
+  assert.equal((await request(app).post('/api/auth/change-password').set(auth(S.owner)).send({ currentPassword: 'password123', newPassword: 'password123' })).status, 400);
+  assert.equal((await request(app).post('/api/auth/change-password').set(auth(S.owner)).send({ currentPassword: 'password123', newPassword: 'owner-own-pass' })).status, 200);
   assert.equal((await request(app).get('/api/admin/overview').set(auth(S.owner))).status, 403, 'owner is not a super admin');
 
   const p = (await request(app).get('/api/syllabus/exam-patterns').set(auth(S.owner))).body.patterns.find((x) => x.code === 'SSC-CGL-T1');
@@ -202,7 +211,7 @@ test('a submitted test sends the result to the parent (only if a parent number i
 });
 
 async function studentLogin(phone) {
-  return (await request(app).post('/api/auth/student-login').send({ centreId: S.centre, phone, password: phone })).body.token;
+  return (await request(app).post('/api/auth/student-login').send({ centreCode: S.code, phone, password: phone })).body.token;
 }
 
 test('next-class plan sends practice links to weak students and the summary to the teacher', { skip }, async () => {
@@ -275,20 +284,20 @@ test('delivery reports from Meta update the message status', { skip }, async () 
 
 test('students can log in with a WhatsApp code instead of the password', { skip }, async () => {
   const before = sent.length;
-  const r = await request(app).post('/api/auth/student-otp').send({ centreId: S.centre, phone: '9876500003' });
+  const r = await request(app).post('/api/auth/student-otp').send({ centreCode: S.code, phone: '9876500003' });
   assert.equal(r.status, 200);
   const msg = sent[before];
   assert.equal(msg.template.name, 'wc_login_otp');
   const code = msg.template.components[0].parameters[0].text;
   assert.match(code, /^\d{6}$/);
-  assert.equal((await request(app).post('/api/auth/student-otp/verify').send({ centreId: S.centre, phone: '9876500003', code: code === '000000' ? '111111' : '000000' })).status, 401);
-  const ok = await request(app).post('/api/auth/student-otp/verify').send({ centreId: S.centre, phone: '9876500003', code });
+  assert.equal((await request(app).post('/api/auth/student-otp/verify').send({ centreCode: S.code, phone: '9876500003', code: code === '000000' ? '111111' : '000000' })).status, 401);
+  const ok = await request(app).post('/api/auth/student-otp/verify').send({ centreCode: S.code, phone: '9876500003', code });
   assert.equal(ok.status, 200);
   assert.ok(ok.body.token);
-  assert.equal((await request(app).post('/api/auth/student-otp/verify').send({ centreId: S.centre, phone: '9876500003', code })).status, 401, 'one use');
+  assert.equal((await request(app).post('/api/auth/student-otp/verify').send({ centreCode: S.code, phone: '9876500003', code })).status, 401, 'one use');
   // Unknown number: same reply, nothing sent.
   const n = sent.length;
-  assert.equal((await request(app).post('/api/auth/student-otp').send({ centreId: S.centre, phone: '9000000001' })).status, 200);
+  assert.equal((await request(app).post('/api/auth/student-otp').send({ centreCode: S.code, phone: '9000000001' })).status, 200);
   assert.equal(sent.length, n);
 });
 
@@ -308,5 +317,7 @@ test('admin sees the centre: usage, WhatsApp log, and edits a shared exam patter
   assert.equal(v.status, 400, 'same code + version is refused');
   const reset = await request(app).post(`/api/admin/centres/${S.centre}/staff/${S.ownerId}/password`).set(auth(S.admin)).send({ password: 'new-password-1' });
   assert.equal(reset.status, 200);
-  assert.equal((await request(app).post('/api/auth/login').send({ email: 'owner@gill.in', password: 'new-password-1' })).status, 200);
+  const again = await request(app).post('/api/auth/login').send({ email: 'owner@gill.in', password: 'new-password-1' });
+  assert.equal(again.status, 200);
+  assert.equal(again.body.user.must_change_password, true, 'a reset password must be changed too');
 });
